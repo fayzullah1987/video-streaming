@@ -140,7 +140,7 @@ function VideoStreamingApp() {
     }
 
     try {
-      const response = await fetch('/api/video/${videoId}', {
+      const response = await fetch(`/api/video/${videoId}`, {
         method: 'DELETE'
       });
 
