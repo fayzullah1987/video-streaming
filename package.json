@@ -1,0 +1,42 @@
+{
+  "name": "video-streaming-backend",
+  "version": "1.0.0",
+  "description": "YouTube-like video streaming with chunk-based delivery",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node backend/src/server.js",
+    "dev": "nodemon backend/src/server.js",
+    "test": "jest --coverage",
+    "debug": "node backend/scripts/debugPaths.js",
+    "upload:test": "node backend/scripts/testUpload.js",
+    "upload:manual": "node backend/scripts/createUploadsManually.js",
+    "build": "npm install && npm install --prefix frontend && npm run build --prefix frontend"
+  },
+  "keywords": [
+    "video",
+    "streaming",
+    "chunk",
+    "range-request",
+    "youtube"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "mongoose": "^9.0.0",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.11.3",
+    "pg-hstore": "^2.3.4",
+    "sequelize": "^6.35.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "supertest": "^6.3.3"
+  }
+}
