@@ -3,7 +3,9 @@ const path = require('path');
 const { Video } = require('../models/Video');
 const videoService = require('../services/videoService');
 
-// Helper function to get project root
+/* -------------------------------------------
+   Find Project Root (where package.json lives)
+-------------------------------------------- */
 const getProjectRoot = () => {
   let currentDir = __dirname;
   while (currentDir !== path.parse(currentDir).root) {
@@ -18,31 +20,33 @@ const getProjectRoot = () => {
 const projectRoot = getProjectRoot();
 const thumbnailsDir = path.join(projectRoot, 'uploads', 'thumbnails');
 
+/* -------------------------------------------
+   Video Controller
+-------------------------------------------- */
 const videoController = {
-  // Upload video + generate thumbnail
+  /* -------------------------------------------
+     Upload Video + Generate Thumbnail
+  -------------------------------------------- */
   uploadVideo: async (req, res) => {
     try {
       if (!req.file) {
-        return res.status(400).json({ error: 'No video file provided' });
+        return res.status(400).json({ error: 'No video provided' });
       }
 
       const videoPath = req.file.path;
       const filename = req.file.filename;
 
-      // FFmpeg metadata
       const metadata = await videoService.getVideoMetadata(videoPath);
 
-      // Ensure thumbnail folder exists
-      if (!fs.existsSync(thumbnailsDir)) {
-        fs.mkdirSync(thumbnailsDir, { recursive: true });
-      }
+      // Ensure thumbnails folder exists
+      fs.mkdirSync(thumbnailsDir, { recursive: true });
 
       const thumbnailFilename = filename.replace(/\.[^/.]+$/, '.jpg');
       const thumbnailPath = path.join(thumbnailsDir, thumbnailFilename);
 
       await videoService.generateThumbnail(videoPath, thumbnailPath);
 
-      // Save in MongoDB
+      // Save to MongoDB
       const video = await Video.create({
         filename,
         originalName: req.file.originalname,
@@ -54,7 +58,7 @@ const videoController = {
         resolution: metadata.resolution
       });
 
-      res.status(201).json({
+      return res.status(201).json({
         message: 'Video uploaded successfully',
         video: {
           id: video._id,
@@ -62,168 +66,126 @@ const videoController = {
           size: video.size,
           duration: video.duration,
           resolution: video.resolution,
+          createdAt: video.createdAt,
           thumbnailUrl: `/api/video/${video._id}/thumbnail`,
           streamUrl: `/api/video/${video._id}/stream`
         }
       });
     } catch (error) {
-      console.error('Upload error:', error);
-
-      // Delete orphan file if db save failed
-      if (req.file && fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
-
-      res.status(500).json({
-        error: 'Failed to upload video',
-        details: error.message
-      });
+      console.error('Upload Error:', error);
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(500).json({ error: 'Upload failed', details: error.message });
     }
   },
 
-  // List videos
+  /* -------------------------------------------
+     List All Videos
+  -------------------------------------------- */
   listVideos: async (req, res) => {
     try {
       const videos = await Video.find().sort({ createdAt: -1 });
 
-      const formattedVideos = videos.map((video) => ({
-        id: video._id,
-        filename: video.originalName,
-        size: video.size,
-        duration: video.duration,
-        resolution: video.resolution,
-        createdAt: video.createdAt,
-        thumbnailUrl: `/api/video/${video._id}/thumbnail`,
-        streamUrl: `/api/video/${video._id}/stream`
-      }));
-
-      res.json({ videos: formattedVideos });
+      return res.json({
+        videos: videos.map((v) => ({
+          id: v._id,
+          filename: v.originalName,
+          size: v.size,
+          duration: v.duration,
+          resolution: v.resolution,
+          createdAt: v.createdAt,
+          thumbnailUrl: `/api/video/${v._id}/thumbnail`,
+          streamUrl: `/api/video/${v._id}/stream`
+        }))
+      });
     } catch (error) {
       console.error('List error:', error);
-      res.status(500).json({
-        error: 'Failed to retrieve videos',
-        details: error.message
-      });
+      return res.status(500).json({ error: 'Failed to load videos' });
     }
   },
 
-  // Stream video
+  /* -------------------------------------------
+     Stream Video (Chunked)
+  -------------------------------------------- */
   streamVideo: async (req, res) => {
     try {
       const { id } = req.params;
       const video = await Video.findById(id);
 
-      if (!video) {
-        return res.status(404).json({ error: 'Video not found' });
+      if (!video) return res.status(404).json({ error: 'Video not found' });
+
+      if (!fs.existsSync(video.path)) {
+        return res.status(404).json({ error: 'Video file missing' });
       }
 
-      const videoPath = video.path;
-
-      if (!fs.existsSync(videoPath)) {
-        console.error('Video file missing:', videoPath);
-        return res.status(404).json({ error: 'Video file not found' });
-      }
-
-      const stat = fs.statSync(videoPath);
+      const stat = fs.statSync(video.path);
       const fileSize = stat.size;
       const range = req.headers.range;
 
-      if (range) {
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-        const chunkSize = end - start + 1;
-
-        const stream = fs.createReadStream(videoPath, { start, end });
-
-        res.writeHead(206, {
-          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-          'Accept-Ranges': 'bytes',
-          'Content-Length': chunkSize,
-          'Content-Type': video.mimeType
-        });
-
-        stream.pipe(res);
-
-        stream.on('error', (err) => {
-          console.error('Stream error:', err);
-          if (!res.headersSent) res.status(500).end();
-        });
-      } else {
+      if (!range) {
         res.writeHead(200, {
           'Content-Length': fileSize,
           'Content-Type': video.mimeType
         });
-
-        const stream = fs.createReadStream(videoPath);
-        stream.pipe(res);
-
-        stream.on('error', (err) => {
-          console.error('Stream error:', err);
-          if (!res.headersSent) res.status(500).end();
-        });
+        return fs.createReadStream(video.path).pipe(res);
       }
+
+      const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(startStr, 10);
+      const end = endStr ? parseInt(endStr, 10) : fileSize - 1;
+      const chunkSize = end - start + 1;
+
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunkSize,
+        'Content-Type': video.mimeType
+      });
+
+      fs.createReadStream(video.path, { start, end }).pipe(res);
     } catch (error) {
       console.error('Stream error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: 'Stream failed',
-          details: error.message
-        });
-      }
+      return res.status(500).json({ error: 'Stream failed' });
     }
   },
 
-  // Get Thumbnail
+  /* -------------------------------------------
+     Serve Thumbnail
+  -------------------------------------------- */
   getThumbnail: async (req, res) => {
     try {
       const video = await Video.findById(req.params.id);
 
-      if (!video || !video.thumbnailPath) {
+      if (!video || !video.thumbnailPath)
         return res.status(404).json({ error: 'Thumbnail not found' });
-      }
 
-      if (!fs.existsSync(video.thumbnailPath)) {
+      if (!fs.existsSync(video.thumbnailPath))
         return res.status(404).json({ error: 'Thumbnail file missing' });
-      }
 
-      res.setHeader('Content-Type', 'image/jpeg');
-      res.sendFile(path.resolve(video.thumbnailPath));
+      return res.sendFile(path.resolve(video.thumbnailPath));
     } catch (error) {
       console.error('Thumbnail error:', error);
-      res.status(500).json({
-        error: 'Failed to load thumbnail',
-        details: error.message
-      });
+      return res.status(500).json({ error: 'Failed to load thumbnail' });
     }
   },
 
-  // Delete video
+  /* -------------------------------------------
+     Delete Video
+  -------------------------------------------- */
   deleteVideo: async (req, res) => {
     try {
       const video = await Video.findById(req.params.id);
+      if (!video) return res.status(404).json({ error: 'Video not found' });
 
-      if (!video) {
-        return res.status(404).json({ error: 'Video not found' });
-      }
-
-      if (fs.existsSync(video.path)) {
-        fs.unlinkSync(video.path);
-      }
-
-      if (video.thumbnailPath && fs.existsSync(video.thumbnailPath)) {
+      if (fs.existsSync(video.path)) fs.unlinkSync(video.path);
+      if (video.thumbnailPath && fs.existsSync(video.thumbnailPath))
         fs.unlinkSync(video.thumbnailPath);
-      }
 
-      await video.remove();
+      await Video.deleteOne({ _id: video._id });
 
-      res.json({ message: 'Video deleted successfully' });
+      return res.json({ message: 'Video deleted successfully' });
     } catch (error) {
       console.error('Delete error:', error);
-      res.status(500).json({
-        error: 'Failed to delete video',
-        details: error.message
-      });
+      return res.status(500).json({ error: 'Failed to delete video' });
     }
   }
 };
